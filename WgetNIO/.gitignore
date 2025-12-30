@@ -1,0 +1,16 @@
+# Archivos de compilación de Java y Maven
+/target/
+*.class
+
+# Archivos específicos de NetBeans
+/nbproject/
+/nbbuild/
+/dist/
+nbvcs.properties
+
+# Archivos de configuración de VS Code
+.vscode/
+
+# Archivos del Sistema Operativo
+.DS_Store
+Thumbs.db
