@@ -1,0 +1,10 @@
+HTTP/1.1 302 FOUND
+Date: Sun, 04 Jan 2026 21:23:16 GMT
+Content-Type: text/html; charset=utf-8
+Content-Length: 0
+Connection: close
+Server: gunicorn/19.9.0
+Location: http://httpbin.org/html
+Access-Control-Allow-Origin: *
+Access-Control-Allow-Credentials: true
+

@@ -1,0 +1,14 @@
+HTTP/1.1 302 FOUND
+Date: Sun, 04 Jan 2026 19:56:32 GMT
+Content-Type: text/html; charset=utf-8
+Content-Length: 227
+Connection: close
+Server: gunicorn/19.9.0
+Location: /links/3/0
+Access-Control-Allow-Origin: *
+Access-Control-Allow-Credentials: true
+
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<title>Redirecting...</title>
+<h1>Redirecting...</h1>
+<p>You should be redirected automatically to target URL: <a href="/links/3/0">/links/3/0</a>.  If not click the link.

@@ -1,5 +1,6 @@
 package irmanayeli.wgetnio;
 
+import java.io.ByteArrayOutputStream;
 import java.io.FileOutputStream;
 import java.net.InetSocketAddress;
 import java.net.URL;
@@ -12,14 +13,19 @@ import java.util.*;
 public class WgetNIO {
 
     private static FileChannel archivoSalida;
+    private static ByteArrayOutputStream bufferContenido;
     private static String directorioSalida;
     private static String hostActual;
     private static String rutaActual;
+    private static String esquemaActual;
     private static int puertoActual;
     private static int profundidadActual;
     private static int profundidadMaxima;
     private static Set<String> descargadas = new HashSet<>();
     private static Queue<String> porDescargar = new LinkedList<>();
+    private static boolean headerProcesado = false;
+    private static int codigoHttpActual = 0;
+    private static String redireccionPendiente = null;
 
     public static void main(String[] args) {
         try {
@@ -43,7 +49,8 @@ public class WgetNIO {
             if (hostActual == null || hostActual.isEmpty()) {
                 hostActual = "www.google.com";
             }
-            puertoActual = url.getPort() == -1 ? (url.getProtocol().equals("https") ? 443 : 80) : url.getPort();
+            esquemaActual = url.getProtocol();
+            puertoActual = url.getPort() == -1 ? (esquemaActual.equals("https") ? 443 : 80) : url.getPort();
             rutaActual = url.getPath().isEmpty() ? "/" : url.getPath();
             if (url.getQuery() != null) {
                 rutaActual += "?" + url.getQuery();
@@ -161,24 +168,94 @@ public class WgetNIO {
 
         try {
             if (archivoSalida == null) {
-                // Crear archivo con nombre basado en la ruta
-                String nombreArchivo = rutaActual.replaceAll("[^a-zA-Z0-9._-]", "_");
-                if (nombreArchivo.isEmpty() || nombreArchivo.equals("_")) {
-                    nombreArchivo = "index.html";
-                } else if (!nombreArchivo.contains(".")) {
-                    nombreArchivo += ".html";
+                // Crear buffer en memoria para luego parsear enlaces
+                bufferContenido = new ByteArrayOutputStream();
+                headerProcesado = false;
+                codigoHttpActual = 0;
+                redireccionPendiente = null;
+
+                // Crear archivo replicando estructura de path
+                String rutaLimpia = rutaActual;
+                String queryParte = "";
+                if (rutaLimpia.contains("?")) {
+                    String[] split = rutaLimpia.split("\\?", 2);
+                    rutaLimpia = split[0];
+                    queryParte = "_" + split[1].replaceAll("[^a-zA-Z0-9._-]", "_");
                 }
-                
-                String rutaCompleta = directorioSalida + "\\" + nombreArchivo;
-                archivoSalida = new FileOutputStream(rutaCompleta).getChannel();
-                System.out.println("   [ARCHIVO]: " + rutaCompleta);
+
+                if (rutaLimpia.endsWith("/")) {
+                    rutaLimpia += "index.html";
+                }
+                if (rutaLimpia.isEmpty() || "/".equals(rutaLimpia)) {
+                    rutaLimpia = "/index.html";
+                }
+
+                // Asegurar subdirectorios dentro del host
+                String pathSinSlashInicial = rutaLimpia.startsWith("/") ? rutaLimpia.substring(1) : rutaLimpia;
+                // Reemplazar "/" con separador del SO desde el inicio
+                String pathConSeparador = pathSinSlashInicial.replace("/", java.io.File.separator);
+                String rutaCompleta = directorioSalida + java.io.File.separator + pathConSeparador;
+
+                // Si hay query, adjuntar al nombre
+                int idx = rutaCompleta.lastIndexOf(java.io.File.separator);
+                String directorioArchivo = rutaCompleta.substring(0, idx);
+                String nombreArchivo = rutaCompleta.substring(idx + 1);
+                if (!queryParte.isEmpty()) {
+                    nombreArchivo = nombreArchivo + queryParte;
+                }
+
+                Files.createDirectories(Paths.get(directorioArchivo));
+                String rutaFinal = directorioArchivo + java.io.File.separator + nombreArchivo;
+
+                archivoSalida = new FileOutputStream(rutaFinal).getChannel();
+                System.out.println("   [ARCHIVO]: " + rutaFinal);
             }
 
             int bytesLeidos = sc.read(buffer);
 
             // -1 indica que el servidor terminó de enviar datos
             if (bytesLeidos == -1) {
-                System.out.println("3. [FIN]: Descarga de " + rutaActual + " completa.");
+                // Procesar headers si no se han procesado aún
+                if (!headerProcesado && bufferContenido != null) {
+                    procesarHeaders();
+                }
+                System.out.println("3. [FIN " + codigoHttpActual + "]: Descarga de " + rutaActual + " completa.");
+
+                // Manejar redirección 301/302 (solo HTTP mismo host)
+                if ((codigoHttpActual == 301 || codigoHttpActual == 302) && redireccionPendiente != null) {
+                    try {
+                        URL base = new URL(esquemaActual, hostActual, puertoActual, rutaActual);
+                        URL destino = new URL(base, redireccionPendiente);
+
+                        if (destino.getProtocol().equalsIgnoreCase("https")) {
+                            System.out.println("   [REDIR]: Se omite redirección a HTTPS (no soportado): " + destino);
+                        } else {
+                            String nuevoHost = destino.getHost();
+                            if (!nuevoHost.equalsIgnoreCase(hostActual)) {
+                                System.out.println("   [REDIR]: Se omite redirección a host distinto: " + destino);
+                            } else {
+                                String nuevoPath = destino.getPath().isEmpty() ? "/" : destino.getPath();
+                                if (destino.getQuery() != null) {
+                                    nuevoPath += "?" + destino.getQuery();
+                                }
+                                String clave = hostActual + nuevoPath;
+                                if (!descargadas.contains(clave)) {
+                                    descargadas.add(clave);
+                                    porDescargar.add(nuevoPath);
+                                    System.out.println("   [REDIR ENCOLADO]: " + nuevoPath);
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        System.out.println("   [REDIR]: Error al procesar Location: " + e.getMessage());
+                    }
+                }
+
+                // Parsear HTML y encolar nuevos enlaces si aplica
+                if (profundidadActual + 1 < profundidadMaxima && bufferContenido != null && codigoHttpActual == 200) {
+                    String html = bufferContenido.toString("UTF-8");
+                    encolarEnlaces(html);
+                }
                 cerrarRecursos(llave, sc);
                 return true;
             }
@@ -187,8 +264,14 @@ public class WgetNIO {
             while (bytesLeidos > 0) {
                 buffer.flip(); // Preparamos el buffer para lectura desde el inicio
                 bytesAcumulados += archivoSalida.write(buffer);
+                bufferContenido.write(buffer.array(), 0, buffer.limit());
                 buffer.clear(); // Volvemos a preparar para recibir más datos
                 bytesLeidos = sc.read(buffer);
+
+                // Procesar headers si aún no se han procesado
+                if (!headerProcesado && bufferContenido != null) {
+                    procesarHeaders();
+                }
             }
 
             if (bytesAcumulados > 0) {
@@ -200,6 +283,106 @@ public class WgetNIO {
             cerrarRecursos(llave, sc);
             return true;
         }
+    }
+
+    private static void procesarHeaders() {
+        if (headerProcesado || bufferContenido == null) return;
+
+        try {
+            String contenido = bufferContenido.toString("UTF-8");
+            int finHeader = contenido.indexOf("\r\n\r\n");
+            if (finHeader == -1) {
+                finHeader = contenido.indexOf("\n\n");
+                if (finHeader == -1) return;
+            }
+
+            String headers = contenido.substring(0, finHeader);
+            String[] lineas = headers.split("\r\n|\n");
+
+            if (lineas.length > 0) {
+                String statusLine = lineas[0];
+                // Parsear status line: "HTTP/1.1 200 OK"
+                String[] partes = statusLine.split(" ");
+                if (partes.length >= 2) {
+                    try {
+                        codigoHttpActual = Integer.parseInt(partes[1]);
+                    } catch (NumberFormatException e) {
+                        codigoHttpActual = 999;
+                    }
+                }
+            }
+
+            // Buscar Location para redirecciones
+            for (String linea : lineas) {
+                if (linea.toLowerCase().startsWith("location:")) {
+                    redireccionPendiente = linea.substring("location:".length()).trim();
+                    break;
+                }
+            }
+
+            headerProcesado = true;
+        } catch (Exception e) {
+            // Ignorar si no se puede parsear todavía
+        }
+    }
+
+    private static void encolarEnlaces(String html) {
+        try {
+            // Buscamos href/src simples en comillas
+            java.util.regex.Pattern p = java.util.regex.Pattern.compile("(?i)(?:href|src)\\s*=\\s*\\\"([^\\\"]+)\\\"");
+            java.util.regex.Matcher m = p.matcher(html);
+
+            URL base = new URL(esquemaActual, hostActual, puertoActual, rutaActual);
+
+            while (m.find()) {
+                String enlace = m.group(1).trim();
+                if (enlace.isEmpty()) continue;
+                if (enlace.startsWith("#") || enlace.startsWith("javascript:")) continue;
+
+                try {
+                    URL resuelta = new URL(base, enlace);
+
+                    // Solo mismo host
+                    if (!resuelta.getHost().equalsIgnoreCase(hostActual)) {
+                        continue;
+                    }
+
+                    String path = resuelta.getPath().isEmpty() ? "/" : resuelta.getPath();
+                    if (resuelta.getQuery() != null) {
+                        path += "?" + resuelta.getQuery();
+                    }
+
+                    // Filtrar: solo permitir ciertos tipos de archivo
+                    if (!esArchivoPermitido(path)) {
+                        continue;
+                    }
+
+                    String clave = hostActual + path;
+                    if (!descargadas.contains(clave)) {
+                        descargadas.add(clave);
+                        porDescargar.add(path);
+                        System.out.println("   [ENCOLADO]: " + path);
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("[WARN] No se pudieron parsear enlaces: " + e.getMessage());
+        }
+    }
+
+    private static boolean esArchivoPermitido(String ruta) {
+        String[] extensionesPermitidas = {
+            ".html", ".htm", ".txt", ".pdf", ".zip", ".jar", ".java", 
+            ".png", ".jpg", ".jpeg", ".gif", ".css", ".js", ".json", ".xml"
+        };
+
+        for (String ext : extensionesPermitidas) {
+            if (ruta.toLowerCase().endsWith(ext)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void cerrarRecursos(SelectionKey llave, SocketChannel sc) {
