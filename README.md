@@ -1,21 +1,119 @@
-# Redes-Practica05
+# WgetNIO - Descargador Recursivo con Java NIO
 
-## WgetNIO: cómo funciona
+Cliente HTTP/HTTPS tipo `wget` usando **Java NIO** (Non-Blocking I/O) y **SSL/TLS** para descarga recursiva de sitios web.
 
-Este ejemplo implementa un descargador HTTP no bloqueante usando Java NIO. El flujo es:
+---
 
-1) Arranque: se abre un `Selector` y un `SocketChannel` en modo no bloqueante hacia el host (en el ejemplo `www.google.com:80`). Se registra el interés en `OP_CONNECT`.
-2) Conexión: cuando el selector indica `isConnectable`, se completa el handshake con `finishConnect()` y se cambia el interés a `OP_WRITE`.
-3) Petición: en `isWritable` se envía un GET básico (`GET / HTTP/1.1`, `Host`, `Connection: close`) y se cambia el interés a `OP_READ`.
-4) Lectura: en `isReadable` se leen bytes en un `ByteBuffer` y se escriben a `index.html` hasta EOF (`read` devuelve -1). Luego se cierran canal, selector y archivo.
+## ✨ Características
 
-## Qué falta para parecerse a wget recursivo
+- ✅ Descarga recursiva con profundidad configurable
+- ✅ Soporte HTTP y HTTPS (SSL/TLS)
+- ✅ Non-Blocking I/O con `Selector` y `SocketChannel`
+- ✅ Creación automática de subdirectorios
+- ✅ Archivos binarios sin corrupción (imágenes, PDFs)
+- ✅ Manejo de redirecciones 301/302
+- ✅ Prevención de descargas duplicadas
 
-- Entrada dinámica: parsear argumentos CLI y URLs (host, puerto, ruta) en vez de valores fijos.
-- HTTP completo: manejar redirecciones 3xx, `Content-Length`, `Transfer-Encoding: chunked`, timeouts y cabeceras opcionales (User-Agent, gzip, Range para reanudar).
-- Rutas locales: crear un directorio con el host y replicar la estructura de paths remotos al guardar cada recurso.
-- Recursión: tras descargar HTML, parsear enlaces (`href`/`src`), normalizar URLs relativas/absolutas, filtrar por dominio/profundidad y usar una cola (BFS/DFS) con un set de visitados para evitar duplicados.
-- Respeto a robots.txt y exclusiones opcionales.
-- Concurrencia: múltiples descargas en paralelo (varios canales) y control de errores/reintentos.
+---
 
-Con estos pasos, el esqueleto actual NIO puede evolucionar hacia un wget que descarga sitios por directorios.
+## 🔧 Compilación y Ejecución
+
+### Compilar
+```bash
+cd WgetNIO
+javac -d target/classes src/main/java/irmanayeli/wgetnio/WgetNIO.java
+```
+
+### Ejecutar
+```bash
+java -cp target/classes irmanayeli.wgetnio.WgetNIO <URL> <PROFUNDIDAD>
+```
+
+**Ejemplo:**
+```bash
+java -cp target/classes irmanayeli.wgetnio.WgetNIO http://textfiles.com 2
+```
+
+---
+
+## 🌐 Ejemplos de Uso
+
+### 1. Motherfucking Website
+```bash
+java -cp target/classes irmanayeli.wgetnio.WgetNIO http://motherfuckingwebsite.com 2
+```
+**Resultado:** `0-Descargas/motherfuckingwebsite_com/index.html`
+
+### 2. TextFiles (con imágenes)
+```bash
+java -cp target/classes irmanayeli.wgetnio.WgetNIO http://textfiles.com 2
+```
+**Resultado:**
+````
+/textfiles_com
+    /imagen1.jpg
+    /documento1.pdf
+    - index.html
+    - estilo.css
+    - script.js
+````
+
+---
+
+## 📁 Estructura de Directorios
+
+El programa crea una estructura de directorios local que refleja la del servidor:
+
+```
+/descargas
+    /example.com
+        /pagina1
+            - index.html
+            - imagen1.png
+        /pagina2
+            - index.html
+```
+
+### Nombres de Archivos
+
+- **HTML**: `index.html` por defecto
+- **Otros**: Se conserva la extensión original (ej. `.jpg`, `.pdf`)
+
+### Manejo de Archivos Duplicados
+
+- **Prevención**: Se evita descargar URLs ya visitadas
+- **Mismo contenido, diferente URL**: Se guarda el archivo, pero se evita procesar como nuevo
+
+---
+
+## 🔄 Recursividad
+
+### Profundidad de Descarga
+
+- **Límite**: `-l` o `--level` en la línea de comandos
+- **Por defecto**: 5 niveles
+
+### Comportamiento en Diferentes Niveles
+
+- **Nivel 0**: Solo descarga la página principal
+- **Nivel 1**: Descarga página principal + enlaces directos
+- **Nivel 2+**: Descarga recursiva según enlaces encontrados
+
+### Ejemplo de Recursividad
+
+```java
+// Supongamos una URL: http://example.com/nivel1
+// Contenido:
+<html>
+  <body>
+    <a href="/nivel2a">Nivel 2A</a>
+    <a href="/nivel2b">Nivel 2B</a>
+  </body>
+</html>
+
+// Proceso:
+1. Descarga http://example.com/nivel1
+2. Encuentra enlaces a /nivel2a y /nivel2b
+3. Encola /nivel2a y /nivel2b con profundidad 2
+4. Descarga nivel 2A y nivel 2B recursivamente
+```
