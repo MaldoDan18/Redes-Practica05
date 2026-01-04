@@ -222,6 +222,9 @@ public class WgetNIO {
                     procesarHeaders();
                 }
                 
+                // Guardar solo el body (sin headers) al archivo final
+                guardarBodySinHeaders();
+                
                 // Mostrar tipo de archivo descargado
                 String tipoArchivo = determinarTipoArchivo();
                 System.out.println("3. [FIN " + codigoHttpActual + "]: Descarga de " + rutaActual + " completa (" + tipoArchivo + ")");
@@ -253,10 +256,11 @@ public class WgetNIO {
 
             int bytesAcumulados = 0;
             while (bytesLeidos > 0) {
-                buffer.flip(); // Preparamos el buffer para lectura desde el inicio
-                bytesAcumulados += archivoSalida.write(buffer);
+                buffer.flip();
+                // NO escribir directamente al archivo, solo al buffer de contenido
                 bufferContenido.write(buffer.array(), 0, buffer.limit());
-                buffer.clear(); // Volvemos a preparar para recibir más datos
+                bytesAcumulados += buffer.limit();
+                buffer.clear();
                 bytesLeidos = sc.read(buffer);
 
                 // Procesar headers si aún no se han procesado
@@ -541,6 +545,9 @@ public class WgetNIO {
                     procesarHeaders();
                 }
                 
+                // Guardar solo el body (sin headers) al archivo final
+                guardarBodySinHeaders();
+                
                 String tipoArchivo = determinarTipoArchivo();
                 System.out.println("3. [FIN " + codigoHttpActual + "]: Descarga de " + rutaActual + " completa (" + tipoArchivo + " - TLS)");
                 
@@ -603,8 +610,7 @@ public class WgetNIO {
         if (appIn.remaining() > 0) {
             byte[] datos = new byte[appIn.remaining()];
             appIn.get(datos);
-            // Guardar
-            archivoSalida.write(ByteBuffer.wrap(datos));
+            // Solo guardar en buffer de contenido, no directamente al archivo
             bufferContenido.write(datos);
             if (!headerProcesado && bufferContenido != null) {
                 procesarHeaders();
@@ -612,6 +618,48 @@ public class WgetNIO {
             System.out.println("3. [LEYENDO]: " + datos.length + " bytes almacenados (TLS)");
         }
         appIn.clear();
+    }
+
+    private static void guardarBodySinHeaders() throws Exception {
+        if (bufferContenido == null || archivoSalida == null) {
+            return;
+        }
+
+        byte[] contenidoCompleto = bufferContenido.toByteArray();
+        
+        // Buscar el final de los headers HTTP
+        int finHeaders = -1;
+        for (int i = 0; i < contenidoCompleto.length - 3; i++) {
+            // Buscar \r\n\r\n
+            if (contenidoCompleto[i] == '\r' && contenidoCompleto[i+1] == '\n' &&
+                contenidoCompleto[i+2] == '\r' && contenidoCompleto[i+3] == '\n') {
+                finHeaders = i + 4;
+                break;
+            }
+        }
+        
+        // Si no encontramos \r\n\r\n, buscar \n\n
+        if (finHeaders == -1) {
+            for (int i = 0; i < contenidoCompleto.length - 1; i++) {
+                if (contenidoCompleto[i] == '\n' && contenidoCompleto[i+1] == '\n') {
+                    finHeaders = i + 2;
+                    break;
+                }
+            }
+        }
+
+        // Escribir solo el body al archivo
+        if (finHeaders != -1 && finHeaders < contenidoCompleto.length) {
+            int longitudBody = contenidoCompleto.length - finHeaders;
+            ByteBuffer bodyBuffer = ByteBuffer.wrap(contenidoCompleto, finHeaders, longitudBody);
+            archivoSalida.write(bodyBuffer);
+            System.out.println("   [GUARDADO]: " + longitudBody + " bytes de contenido (sin headers HTTP)");
+        } else {
+            // Si no hay headers (raro), guardar todo
+            ByteBuffer todoBuffer = ByteBuffer.wrap(contenidoCompleto);
+            archivoSalida.write(todoBuffer);
+            System.out.println("   [GUARDADO]: " + contenidoCompleto.length + " bytes (sin headers detectados)");
+        }
     }
 
     private static void prepararArchivoSalida() throws Exception {
